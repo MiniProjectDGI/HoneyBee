@@ -1,0 +1,976 @@
+// Honey Chain — Prisma Schema
+// Database: PostgreSQL
+// All tables use UUID primary keys
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  BEEKEEPER
+  COLLECTION_CENTER
+  PROCESSOR
+  QUALITY_LAB
+  DISTRIBUTOR
+  RETAILER
+  CONSUMER
+}
+
+enum AccountStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  PENDING_VERIFICATION
+}
+
+enum BatchStatus {
+  DRAFT
+  COLLECTED
+  PROCESSING
+  QUALITY_TESTING
+  APPROVED
+  PACKAGED
+  IN_DISTRIBUTION
+  AT_RETAILER
+  SOLD
+  RECALLED
+}
+
+enum HiveStatus {
+  ACTIVE
+  INACTIVE
+  ABANDONED
+  MIGRATED
+}
+
+enum DeviceStatus {
+  ACTIVE
+  INACTIVE
+  MAINTENANCE
+  OFFLINE
+  DECOMMISSIONED
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  ACKNOWLEDGED
+  RESOLVED
+}
+
+enum AlertType {
+  TEMPERATURE_HIGH
+  TEMPERATURE_LOW
+  HUMIDITY_HIGH
+  HUMIDITY_LOW
+  WEIGHT_DROP
+  WEIGHT_INCREASE
+  BATTERY_LOW
+  DEVICE_OFFLINE
+  COLONY_ANOMALY
+  AI_DISEASE_RISK
+  CUSTOM
+}
+
+enum QualityStatus {
+  PENDING
+  PASS
+  FAIL
+  CONDITIONAL_PASS
+}
+
+enum BlockchainRecordStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+  UNVERIFIED
+}
+
+enum AIModelStatus {
+  MODEL_AVAILABLE
+  MODEL_UNAVAILABLE
+  PREDICTION_PENDING
+  PREDICTION_AVAILABLE
+  PREDICTION_FAILED
+  INSUFFICIENT_DATA
+}
+
+enum AIAnalysisType {
+  DISEASE_DETECTION
+  COLONY_HEALTH
+  PRODUCTIVITY_PREDICTION
+  ANOMALY_DETECTION
+}
+
+enum ListingStatus {
+  ACTIVE
+  SOLD_OUT
+  SUSPENDED
+  EXPIRED
+  DRAFT
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+enum ShipmentStatus {
+  PREPARING
+  DISPATCHED
+  IN_TRANSIT
+  DELIVERED
+  RETURNED
+}
+
+// ─────────────────────────────────────────────────────────────
+// USER & AUTH
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id                String         @id @default(uuid())
+  email             String         @unique
+  passwordHash      String
+  role              UserRole       @default(CONSUMER)
+  status            AccountStatus  @default(PENDING_VERIFICATION)
+  firstName         String
+  lastName          String
+  phone             String?
+  avatarUrl         String?
+  emailVerified     Boolean        @default(false)
+  emailVerifiedAt   DateTime?
+  lastLoginAt       DateTime?
+  lastLoginIp       String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  deletedAt         DateTime?
+
+  // Relations
+  refreshTokens     RefreshToken[]
+  beekeeper         Beekeeper?
+  organizationMemberships OrganizationMember[]
+  auditLogs         AuditLog[]     @relation("AuditLogUser")
+  notifications     Notification[]
+  orders            Order[]
+  consumerVerifications ConsumerVerification[]
+
+  @@index([email])
+  @@index([role])
+  @@index([deletedAt])
+  @@map("users")
+}
+
+model RefreshToken {
+  id          String   @id @default(uuid())
+  token       String   @unique
+  userId      String
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  revokedAt   DateTime?
+  ipAddress   String?
+  userAgent   String?
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ─────────────────────────────────────────────────────────────
+// ORGANIZATION & CLUSTER
+// ─────────────────────────────────────────────────────────────
+
+model Organization {
+  id            String   @id @default(uuid())
+  name          String
+  code          String   @unique
+  description   String?
+  address       String?
+  state         String?
+  district      String?
+  pincode       String?
+  phone         String?
+  email         String?
+  website       String?
+  logoUrl       String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  members       OrganizationMember[]
+  clusters      Cluster[]
+  beekeepers    Beekeeper[]
+
+  @@index([code])
+  @@map("organizations")
+}
+
+model OrganizationMember {
+  id             String       @id @default(uuid())
+  organizationId String
+  userId         String
+  role           UserRole
+  joinedAt       DateTime     @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  user           User         @relation(fields: [userId], references: [id])
+
+  @@unique([organizationId, userId])
+  @@map("organization_members")
+}
+
+model Cluster {
+  id             String       @id @default(uuid())
+  organizationId String
+  name           String
+  code           String       @unique
+  description    String?
+  state          String?
+  district       String?
+  latitude       Float?
+  longitude      Float?
+  isActive       Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  beekeepers     Beekeeper[]
+
+  @@index([organizationId])
+  @@map("clusters")
+}
+
+// ─────────────────────────────────────────────────────────────
+// BEEKEEPER
+// ─────────────────────────────────────────────────────────────
+
+model Beekeeper {
+  id                String       @id @default(uuid())
+  userId            String       @unique
+  organizationId    String?
+  clusterId         String?
+  beekeeperCode     String       @unique
+  registrationNumber String?     @unique
+  experienceYears   Int          @default(0)
+  address           String?
+  village           String?
+  district          String?
+  state             String?
+  pincode           String?
+  latitude          Float?
+  longitude         Float?
+  bankAccountNumber String?
+  ifscCode          String?
+  isActive          Boolean      @default(true)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  deletedAt         DateTime?
+
+  user              User         @relation(fields: [userId], references: [id])
+  organization      Organization? @relation(fields: [organizationId], references: [id])
+  cluster           Cluster?     @relation(fields: [clusterId], references: [id])
+  hives             Hive[]
+  honeyBatches      HoneyBatch[]
+  honeyCollections  HoneyCollection[]
+
+  @@index([beekeeperCode])
+  @@index([organizationId])
+  @@index([clusterId])
+  @@map("beekeepers")
+}
+
+// ─────────────────────────────────────────────────────────────
+// HIVE
+// ─────────────────────────────────────────────────────────────
+
+model Hive {
+  id              String     @id @default(uuid())
+  beekeeperId     String
+  hiveCode        String     @unique
+  name            String
+  hiveType        String?
+  species         String?
+  latitude        Float?
+  longitude       Float?
+  address         String?
+  village         String?
+  district        String?
+  state           String?
+  status          HiveStatus @default(ACTIVE)
+  establishedAt   DateTime?
+  notes           String?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+  deletedAt       DateTime?
+
+  beekeeper       Beekeeper  @relation(fields: [beekeeperId], references: [id])
+  devices         Device[]
+  sensors         HiveSensor[]
+  healthRecords   HiveHealthRecord[]
+  honeyCollections HoneyCollection[]
+  aiAnalyses      AIAnalysis[]
+  alerts          Alert[]
+
+  @@index([beekeeperId])
+  @@index([status])
+  @@map("hives")
+}
+
+// ─────────────────────────────────────────────────────────────
+// IOT — DEVICE & TELEMETRY
+// ─────────────────────────────────────────────────────────────
+
+model Device {
+  id              String       @id @default(uuid())
+  deviceId        String       @unique  // Hardware device identifier
+  hiveId          String?
+  beekeeperId     String?
+  deviceType      String       // TEMPERATURE_HUMIDITY, WEIGHT_SCALE, ACOUSTIC, MULTI_SENSOR
+  firmwareVersion String?
+  manufacturer    String?
+  model           String?
+  apiKey          String       @unique  // Hashed API key for device auth
+  status          DeviceStatus @default(ACTIVE)
+  latitude        Float?
+  longitude       Float?
+  lastSeenAt      DateTime?
+  batteryLevel    Float?
+  notes           String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  deletedAt       DateTime?
+
+  hive            Hive?        @relation(fields: [hiveId], references: [id])
+  telemetry       DeviceTelemetry[]
+  sensors         HiveSensor[]
+  alerts          Alert[]
+
+  @@index([deviceId])
+  @@index([hiveId])
+  @@index([status])
+  @@map("devices")
+}
+
+model HiveSensor {
+  id            String   @id @default(uuid())
+  hiveId        String
+  deviceId      String?
+  sensorType    String   // TEMPERATURE, HUMIDITY, WEIGHT, ACOUSTIC, CO2, GPS
+  unit          String?
+  isActive      Boolean  @default(true)
+  installedAt   DateTime @default(now())
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  hive          Hive     @relation(fields: [hiveId], references: [id])
+  device        Device?  @relation(fields: [deviceId], references: [id])
+  readings      SensorReading[]
+
+  @@index([hiveId])
+  @@map("hive_sensors")
+}
+
+model SensorReading {
+  id          String   @id @default(uuid())
+  sensorId    String
+  value       Float
+  unit        String?
+  quality     String?  // GOOD, POOR, BAD (signal quality)
+  recordedAt  DateTime
+  createdAt   DateTime @default(now())
+
+  sensor      HiveSensor @relation(fields: [sensorId], references: [id])
+
+  @@index([sensorId, recordedAt])
+  @@map("sensor_readings")
+}
+
+model DeviceTelemetry {
+  id              String   @id @default(uuid())
+  deviceId        String
+  hiveId          String?
+  temperature     Float?
+  humidity        Float?
+  weight          Float?
+  soundLevel      Float?
+  co2Level        Float?
+  batteryLevel    Float?
+  latitude        Float?
+  longitude       Float?
+  altitude        Float?
+  rssi            Float?   // Signal strength
+  rawPayload      Json?    // Full raw JSON from device
+  recordedAt      DateTime
+  receivedAt      DateTime @default(now())
+  isProcessed     Boolean  @default(false)
+  anomalyDetected Boolean  @default(false)
+  createdAt       DateTime @default(now())
+
+  device          Device   @relation(fields: [deviceId], references: [id])
+
+  @@index([deviceId, recordedAt])
+  @@index([hiveId, recordedAt])
+  @@index([isProcessed])
+  @@map("device_telemetry")
+}
+
+// ─────────────────────────────────────────────────────────────
+// HIVE HEALTH
+// ─────────────────────────────────────────────────────────────
+
+model HiveHealthRecord {
+  id              String   @id @default(uuid())
+  hiveId          String
+  inspectedBy     String   // userId
+  inspectionDate  DateTime
+  colonyStrength  String?  // STRONG, MODERATE, WEAK
+  queenPresent    Boolean?
+  queenStatus     String?
+  broodCondition  String?
+  honeyStores     String?
+  diseaseSymptoms String?
+  pestPresence    String?
+  overallHealth   String?  // EXCELLENT, GOOD, FAIR, POOR, CRITICAL
+  notes           String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  hive            Hive     @relation(fields: [hiveId], references: [id])
+
+  @@index([hiveId, inspectionDate])
+  @@map("hive_health_records")
+}
+
+// ─────────────────────────────────────────────────────────────
+// HONEY BATCH & LIFECYCLE
+// ─────────────────────────────────────────────────────────────
+
+model HoneyBatch {
+  id                String      @id @default(uuid())
+  publicBatchId     String      @unique  // HC-YYYYMM-XXXX (public identifier for QR)
+  beekeeperId       String
+  organizationId    String?
+  clusterId         String?
+  status            BatchStatus @default(DRAFT)
+  floralSource      String?
+  variety           String?     // e.g., Mustard, Sunflower, Multifloral
+  harvestSeason     String?
+  harvestYear       Int?
+  totalQuantityKg   Float?
+  remainingQuantityKg Float?
+  unit              String      @default("kg")
+  packagingType     String?
+  storageConditions String?
+  notes             String?
+  recallReason      String?
+  recalledAt        DateTime?
+  finalizedAt       DateTime?
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+  deletedAt         DateTime?
+
+  beekeeper         Beekeeper   @relation(fields: [beekeeperId], references: [id])
+  events            BatchEvent[]
+  collections       HoneyCollection[]
+  processingRecords ProcessingRecord[]
+  qualityTests      QualityTest[]
+  blockchainRecord  BlockchainRecord?
+  qrCode            QRCode?
+  consumerVerifications ConsumerVerification[]
+  shipments         Shipment[]
+  marketListings    MarketListing[]
+  documents         Document[]
+
+  @@index([publicBatchId])
+  @@index([beekeeperId])
+  @@index([status])
+  @@map("honey_batches")
+}
+
+model BatchEvent {
+  id            String   @id @default(uuid())
+  batchId       String
+  eventType     String   // BATCH_CREATED, HONEY_COLLECTED, etc.
+  performedBy   String   // userId
+  description   String
+  metadata      Json?    // Additional structured data for the event
+  location      String?
+  latitude      Float?
+  longitude     Float?
+  eventHash     String?  // SHA-256 hash of canonical event JSON
+  blockchainTxHash String? // Transaction hash if recorded on-chain
+  eventAt       DateTime @default(now())
+  createdAt     DateTime @default(now())
+
+  batch         HoneyBatch @relation(fields: [batchId], references: [id])
+
+  @@index([batchId, eventAt])
+  @@index([eventType])
+  @@map("batch_events")
+}
+
+model HoneyCollection {
+  id              String     @id @default(uuid())
+  batchId         String
+  hiveId          String
+  beekeeperId     String
+  collectionDate  DateTime
+  quantityKg      Float
+  temperatureC    Float?     // Ambient temp at collection
+  humidityPercent Float?
+  notes           String?
+  collectedBy     String     // userId
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  batch           HoneyBatch @relation(fields: [batchId], references: [id])
+  hive            Hive       @relation(fields: [hiveId], references: [id])
+  beekeeper       Beekeeper  @relation(fields: [beekeeperId], references: [id])
+
+  @@index([batchId])
+  @@index([hiveId])
+  @@map("honey_collections")
+}
+
+model ProcessingRecord {
+  id                String     @id @default(uuid())
+  batchId           String
+  processingCenterId String?
+  processedBy       String     // userId
+  processedAt       DateTime
+  processingType    String     // FILTERING, PASTEURIZATION, BLENDING, PACKAGING
+  inputQuantityKg   Float?
+  outputQuantityKg  Float?
+  processingTemp    Float?
+  processingDuration Int?      // minutes
+  equipmentUsed     String?
+  notes             String?
+  createdAt         DateTime   @default(now())
+  updatedAt         DateTime   @updatedAt
+
+  batch             HoneyBatch @relation(fields: [batchId], references: [id])
+
+  @@index([batchId])
+  @@map("processing_records")
+}
+
+// ─────────────────────────────────────────────────────────────
+// QUALITY TESTING
+// ─────────────────────────────────────────────────────────────
+
+model QualityTest {
+  id                  String        @id @default(uuid())
+  batchId             String
+  labId               String?       // Organization ID of lab
+  testedBy            String        // userId
+  testDate            DateTime
+  testStandard        String?       // e.g., FSSAI, BIS, Codex Alimentarius
+  
+  // Quality parameters
+  moisturePercent     Float?
+  hmfMgPerKg          Float?        // Hydroxymethylfurfural
+  diastaseNumber      Float?
+  electricalConductivity Float?
+  ph                  Float?
+  invertSugarPercent  Float?
+  sucrosPercent       Float?
+  fructosePercent     Float?
+  glucosePercent      Float?
+  pollenCount         Int?
+  pollenTypes         String?       // JSON array as string
+  color               String?       // Pfund scale or descriptive
+  aroma               String?
+  appearance          String?
+  
+  // Adulterant tests
+  syrupAdulteration   Boolean?
+  antibioticResidues  Boolean?
+  pesticideResidues   Boolean?
+  heavyMetals         Boolean?
+  
+  status              QualityStatus @default(PENDING)
+  overallGrade        String?       // A, B, C, FAIL
+  remarks             String?
+  
+  reportUrl           String?       // Link to uploaded report document
+  
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  batch               HoneyBatch   @relation(fields: [batchId], references: [id])
+
+  @@index([batchId])
+  @@index([status])
+  @@map("quality_tests")
+}
+
+// ─────────────────────────────────────────────────────────────
+// BLOCKCHAIN
+// ─────────────────────────────────────────────────────────────
+
+model BlockchainRecord {
+  id                String                 @id @default(uuid())
+  batchId           String                 @unique
+  publicBatchId     String
+  batchHash         String                 // Hash of batch canonical data
+  registrationTxHash String?               // Blockchain transaction hash
+  registrationBlock Int?
+  registrationAt    DateTime?
+  networkId         String?                // Chain ID
+  contractAddress   String?
+  status            BlockchainRecordStatus @default(PENDING)
+  verificationCount Int                    @default(0)
+  lastVerifiedAt    DateTime?
+  errorMessage      String?
+  metadata          Json?
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
+
+  batch             HoneyBatch             @relation(fields: [batchId], references: [id])
+
+  @@index([publicBatchId])
+  @@index([registrationTxHash])
+  @@map("blockchain_records")
+}
+
+// ─────────────────────────────────────────────────────────────
+// QR CODE & CONSUMER VERIFICATION
+// ─────────────────────────────────────────────────────────────
+
+model QRCode {
+  id              String   @id @default(uuid())
+  batchId         String   @unique
+  publicBatchId   String   @unique  // Used in QR URL: /verify/{publicBatchId}
+  verificationUrl String
+  qrImageUrl      String?
+  generatedBy     String   // userId
+  generatedAt     DateTime @default(now())
+  expiresAt       DateTime?
+  isActive        Boolean  @default(true)
+  scanCount       Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  batch           HoneyBatch @relation(fields: [batchId], references: [id])
+
+  @@index([publicBatchId])
+  @@map("qr_codes")
+}
+
+model ConsumerVerification {
+  id              String   @id @default(uuid())
+  batchId         String
+  publicBatchId   String
+  userId          String?  // null if anonymous scan
+  ipAddress       String?
+  userAgent       String?
+  verificationResult String // VERIFIED, FAILED, BATCH_NOT_FOUND, BLOCKCHAIN_MISMATCH
+  blockchainVerified Boolean @default(false)
+  scanLocation    String?
+  latitude        Float?
+  longitude       Float?
+  verifiedAt      DateTime @default(now())
+
+  batch           HoneyBatch @relation(fields: [batchId], references: [id])
+  user            User?      @relation(fields: [userId], references: [id])
+
+  @@index([batchId, verifiedAt])
+  @@index([publicBatchId])
+  @@map("consumer_verifications")
+}
+
+// ─────────────────────────────────────────────────────────────
+// AI ANALYSIS
+// ─────────────────────────────────────────────────────────────
+
+model AIAnalysis {
+  id              String        @id @default(uuid())
+  hiveId          String?
+  batchId         String?
+  analysisType    AIAnalysisType
+  status          AIModelStatus @default(MODEL_UNAVAILABLE)
+  requestedBy     String        // userId
+  requestedAt     DateTime      @default(now())
+  completedAt     DateTime?
+  modelVersion    String?
+  modelProvider   String?
+  inputDataRef    String?       // Reference to input (image ID, telemetry range, etc.)
+  rawResponse     Json?         // Full model response
+  errorMessage    String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  hive            Hive?         @relation(fields: [hiveId], references: [id])
+  diseaseDetection DiseaseDetection?
+  productivityPrediction ProductivityPrediction?
+
+  @@index([hiveId])
+  @@index([batchId])
+  @@index([status])
+  @@map("ai_analyses")
+}
+
+model DiseaseDetection {
+  id              String   @id @default(uuid())
+  analysisId      String   @unique
+  imageId         String?
+  imageUrl        String?
+  prediction      String?  // e.g., "Varroa Mite Infestation (Potential)"
+  confidence      Float?   // 0.0 to 1.0
+  alternativeDetections Json? // Other possible conditions with confidence
+  recommendation String?
+  reviewStatus    String?  // PENDING_REVIEW, REVIEWED
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  reviewNotes     String?
+  disclaimer      String   @default("This is a machine-learning assisted analysis and should not replace professional veterinary or apiculture expert assessment.")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  analysis        AIAnalysis @relation(fields: [analysisId], references: [id])
+
+  @@map("disease_detections")
+}
+
+model ProductivityPrediction {
+  id                String   @id @default(uuid())
+  analysisId        String   @unique
+  hiveId            String?
+  predictionPeriod  String?  // e.g., "next 30 days", "current season"
+  predictedYieldKg  Float?
+  unit              String   @default("kg")
+  confidenceScore   Float?   // 0.0 to 1.0
+  lowerBoundKg      Float?
+  upperBoundKg      Float?
+  basisFeatures     Json?    // Which features were used for prediction
+  modelVersion      String?
+  disclaimer        String   @default("Productivity predictions are estimates based on historical data and environmental factors. Actual yield may vary.")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  analysis          AIAnalysis @relation(fields: [analysisId], references: [id])
+
+  @@map("productivity_predictions")
+}
+
+// ─────────────────────────────────────────────────────────────
+// ALERTS
+// ─────────────────────────────────────────────────────────────
+
+model Alert {
+  id              String        @id @default(uuid())
+  hiveId          String?
+  deviceId        String?
+  userId          String?       // Target user for notification
+  alertType       AlertType
+  severity        AlertSeverity
+  status          AlertStatus   @default(OPEN)
+  title           String
+  message         String
+  metadata        Json?         // Sensor values, thresholds, etc.
+  acknowledgedBy  String?
+  acknowledgedAt  DateTime?
+  resolvedBy      String?
+  resolvedAt      DateTime?
+  resolvedNotes   String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  hive            Hive?         @relation(fields: [hiveId], references: [id])
+  device          Device?       @relation(fields: [deviceId], references: [id])
+
+  @@index([hiveId, status])
+  @@index([deviceId])
+  @@index([status, severity])
+  @@map("alerts")
+}
+
+// ─────────────────────────────────────────────────────────────
+// NOTIFICATIONS
+// ─────────────────────────────────────────────────────────────
+
+model Notification {
+  id          String   @id @default(uuid())
+  userId      String
+  title       String
+  message     String
+  type        String   // INFO, SUCCESS, WARNING, ERROR
+  entityType  String?  // batch, hive, alert, etc.
+  entityId    String?
+  isRead      Boolean  @default(false)
+  readAt      DateTime?
+  createdAt   DateTime @default(now())
+
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+// ─────────────────────────────────────────────────────────────
+// AUDIT LOG
+// ─────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  action      String   // BATCH_CREATED, USER_ROLE_CHANGED, etc.
+  entityType  String?
+  entityId    String?
+  description String?
+  metadata    Json?    // Before/after state, additional context
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  user        User?    @relation("AuditLogUser", fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// ─────────────────────────────────────────────────────────────
+// MARKETPLACE
+// ─────────────────────────────────────────────────────────────
+
+model MarketListing {
+  id                String        @id @default(uuid())
+  batchId           String
+  sellerId          String        // userId
+  organizationId    String?
+  title             String
+  description       String?
+  pricePerKg        Float
+  currency          String        @default("INR")
+  availableQuantityKg Float
+  unit              String        @default("kg")
+  minimumOrderKg    Float?
+  maximumOrderKg    Float?
+  harvestSeason     String?
+  variety           String?
+  qualityCertified  Boolean       @default(false)
+  blockchainVerified Boolean      @default(false)
+  deliveryOptions   String?
+  status            ListingStatus @default(DRAFT)
+  expiresAt         DateTime?
+  tags              String[]
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
+  deletedAt         DateTime?
+
+  batch             HoneyBatch    @relation(fields: [batchId], references: [id])
+  orders            Order[]
+
+  @@index([status])
+  @@index([sellerId])
+  @@index([batchId])
+  @@map("market_listings")
+}
+
+model Order {
+  id              String      @id @default(uuid())
+  listingId       String
+  buyerId         String
+  quantityKg      Float
+  unitPrice       Float
+  totalAmount     Float
+  currency        String      @default("INR")
+  status          OrderStatus @default(PENDING)
+  paymentStatus   String?     // PENDING, PAID, FAILED, REFUNDED
+  paymentRef      String?
+  shippingAddress String?
+  notes           String?
+  confirmedAt     DateTime?
+  cancelledAt     DateTime?
+  cancelReason    String?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  listing         MarketListing @relation(fields: [listingId], references: [id])
+  buyer           User          @relation(fields: [buyerId], references: [id])
+  shipments       Shipment[]
+
+  @@index([listingId])
+  @@index([buyerId])
+  @@index([status])
+  @@map("orders")
+}
+
+model Shipment {
+  id              String         @id @default(uuid())
+  orderId         String?
+  batchId         String?
+  fromAddress     String?
+  toAddress       String?
+  carrier         String?
+  trackingNumber  String?
+  status          ShipmentStatus @default(PREPARING)
+  shippedAt       DateTime?
+  estimatedArrival DateTime?
+  deliveredAt     DateTime?
+  notes           String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  order           Order?         @relation(fields: [orderId], references: [id])
+  batch           HoneyBatch?    @relation(fields: [batchId], references: [id])
+
+  @@index([orderId])
+  @@index([batchId])
+  @@map("shipments")
+}
+
+// ─────────────────────────────────────────────────────────────
+// DOCUMENTS
+// ─────────────────────────────────────────────────────────────
+
+model Document {
+  id            String   @id @default(uuid())
+  batchId       String?
+  uploadedBy    String   // userId
+  fileName      String
+  originalName  String
+  mimeType      String
+  sizeBytes     Int
+  storagePath   String
+  storageUrl    String?
+  documentType  String   // QUALITY_REPORT, CERTIFICATE, INVOICE, IMAGE, OTHER
+  description   String?
+  isPublic      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  batch         HoneyBatch? @relation(fields: [batchId], references: [id])
+
+  @@index([batchId])
+  @@index([uploadedBy])
+  @@map("documents")
+}
